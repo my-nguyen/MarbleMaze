@@ -17,11 +17,18 @@ enum CollisionTypes: UInt32 {
     case Finish = 16
 }
 
-class GameScene: SKScene {
+class GameScene: SKScene, SKPhysicsContactDelegate {
 
     var player: SKSpriteNode!
     var lastTouchPosition: CGPoint?
     var motionManager: CMMotionManager!
+    var scoreLabel: SKLabelNode!
+    var score: Int = 0 {
+        didSet {
+            scoreLabel.text = "Score: \(score)"
+        }
+    }
+    var gameOver = false
     
     override func didMoveToView(view: SKView) {
         // load a background picture
@@ -43,6 +50,16 @@ class GameScene: SKScene {
         motionManager = CMMotionManager()
         // start collecting motion information
         motionManager.startAccelerometerUpdates()
+
+        // add a score label to the top-left corner of the screen
+        scoreLabel = SKLabelNode(fontNamed: "Chalkduster")
+        scoreLabel.text = "Score: 0"
+        scoreLabel.horizontalAlignmentMode = .Left
+        scoreLabel.position = CGPoint(x: 16, y: 16)
+        addChild(scoreLabel)
+
+        // make this view the contact delegate for the physics world
+        physicsWorld.contactDelegate = self
     }
 
     /// hack to simulate moving the ball (player) using touch on the simulator
@@ -73,24 +90,27 @@ class GameScene: SKScene {
     }
 
     override func update(currentTime: CFTimeInterval) {
+        // only evaluate when game is still on
+        if !gameOver {
 #if (arch(i386) || arch(x86_64))
-        /// on an Intel CPU (simulator)
-        // unwrap the optional lastTouchPosition
-        if let currentTouch = lastTouchPosition {
-            // calculate the difference between the current touch and the player's position
-            let diff = CGPoint(x: currentTouch.x - player.position.x, y: currentTouch.y - player.position.y)
-            // use that diff to change the gravity value of the physics world
-            physicsWorld.gravity = CGVector(dx: diff.x / 100, dy: diff.y / 100)
-        }
+            /// on an Intel CPU (simulator)
+            // unwrap the optional lastTouchPosition
+            if let currentTouch = lastTouchPosition {
+                // calculate the difference between the current touch and the player's position
+                let diff = CGPoint(x: currentTouch.x - player.position.x, y: currentTouch.y - player.position.y)
+                // use that diff to change the gravity value of the physics world
+                physicsWorld.gravity = CGVector(dx: diff.x / 100, dy: diff.y / 100)
+            }
 #else
-        /// on an iOS device (phone or tablet)
-        // unwrap the optional accelerometer data
-        if let accelerometerData = motionManager.accelerometerData {
-            // change the gravity to reflect the accelerometer data
-            // the accelerometer Y is passed to CGVector's X, because the device is rotated to landscape
-            physicsWorld.gravity = CGVector(dx: accelerometerData.acceleration.y * -50, dy: accelerometerData.acceleration.x * 50)
-        }
+            /// on an iOS device (phone or tablet)
+            // unwrap the optional accelerometer data
+            if let accelerometerData = motionManager.accelerometerData {
+                // change the gravity to reflect the accelerometer data
+                // the accelerometer Y is passed to CGVector's X, because the device is rotated to landscape
+                physicsWorld.gravity = CGVector(dx: accelerometerData.acceleration.y * -50, dy: accelerometerData.acceleration.x * 50)
+            }
 #endif
+        }
     }
 
     func loadLevel() {
@@ -181,5 +201,45 @@ class GameScene: SKScene {
         player.physicsBody!.contactTestBitMask = CollisionTypes.Star.rawValue | CollisionTypes.Vortex.rawValue | CollisionTypes.Finish.rawValue
         player.physicsBody!.collisionBitMask = CollisionTypes.Wall.rawValue
         addChild(player)
+    }
+
+    func didBeginContact(contact: SKPhysicsContact) {
+        if contact.bodyA.node == player {
+            playerCollidedWithNode(contact.bodyB.node!)
+        } else if contact.bodyB.node == player {
+            playerCollidedWithNode(contact.bodyA.node!)
+        }
+    }
+
+    func playerCollidedWithNode(node: SKNode) {
+        if node.name == "vortex" {
+            /// when colliding with a vortex
+            // stop the ball from being a dynamic physics body so it stops moving
+            player.physicsBody!.dynamic = false
+            gameOver = true
+            score -= 1
+
+            // move the ball over the vortex to simulate it being sucked in
+            let move = SKAction.moveTo(node.position, duration: 0.25)
+            // scale down the ball a bit
+            let scale = SKAction.scaleTo(0.0001, duration: 0.25)
+            // remove the ball from the game
+            let remove = SKAction.removeFromParent()
+            // put all those actions together in an SKAction sequence
+            let sequence = SKAction.sequence([move, scale, remove])
+
+            // re-create the the player ball and re-enable control
+            // this closure will execute when the actions finish
+            player.runAction(sequence) { [unowned self] in
+                self.createPlayer()
+                self.gameOver = false
+            }
+        } else if node.name == "star" {
+            // when colliding with a star, remove the star from the scene and increase the score
+            node.removeFromParent()
+            score += 1
+        } else if node.name == "finish" {
+            // next level?
+        }
     }
 }
